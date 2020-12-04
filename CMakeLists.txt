@@ -151,7 +151,10 @@ add_executable(fkine src/fkine.cpp)
 add_executable(ur_iksolver src/ur_iksolver.cpp)
 add_executable(xmate_iksolver src/xmate_iksolver.cpp)
 add_executable(master_control_xmate src/master_control_xmate.cpp)
+add_executable(master_control_xmate_clik src/master_control_xmate_clik.cpp)
 add_executable(testnode src/testnode.cpp)
+
+
 
 ## Rename C++ executable without prefix
 ## The above recommended prefix causes long target names, the following renames the
@@ -179,6 +182,12 @@ target_link_libraries(xmate_iksolver ${catkin_LIBRARIES})
 target_link_libraries(master_control_xmate orocos-kdl)
 target_link_libraries(master_control_xmate kdl_parser)
 target_link_libraries(master_control_xmate ${catkin_LIBRARIES})
+
+target_link_libraries(master_control_xmate_clik orocos-kdl)
+target_link_libraries(master_control_xmate_clik kdl_parser)
+target_link_libraries(master_control_xmate_clik eigen_conversions)
+target_link_libraries(master_control_xmate_clik ${catkin_LIBRARIES})
+
 
 target_link_libraries(testnode orocos-kdl)
 target_link_libraries(testnode kdl_parser)
