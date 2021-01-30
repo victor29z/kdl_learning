@@ -34,16 +34,7 @@
 #include<time.h>
 #include <sstream>
 
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <string.h>
-
-#include <netdb.h>
-#include <arpa/inet.h>
-
-#include <vector>
-#define NO_OF_JOINTS 13
+#define NO_OF_JOINTS 18
 
 using namespace KDL; 
 using namespace std; 
@@ -53,66 +44,44 @@ bool new_target = false;
 geometry_msgs::Twist target;
 sensor_msgs::JointState joint_state;
 float master_joint_pos[7];
-JntArray xmate_joint_positions = JntArray(7); 
+JntArray xmate_joint_positions = JntArray(7);
+JntArray slave_l_joint_positions = JntArray(7);
 JntArray xmate_joint_positions_clik = JntArray(7);
 JntArray master_joint_positions = JntArray(7); 
-JntArray slave_constraint =  JntArray(4);
-JntArray slave_constraint_predicted =  JntArray(7);
+JntArray master_l_joint_positions = JntArray(7);
+int master_jaw_state = -1;
+
 const char* j_name_list[]={
-"xmate_joint_1", 
-"xmate_joint_2", 
-"xmate_joint_3", 
-"xmate_joint_4", 
-"xmate_joint_5", 
-"xmate_joint_6",
-"xmate_joint_7", 
-"finger_joint", 
-"left_inner_knuckle_joint", 
-"left_inner_finger_joint",
-"right_outer_knuckle_joint", 
-"right_inner_knuckle_joint", 
-"right_inner_finger_joint"
+		"yumi_joint_1_r",
+		"yumi_joint_2_r" ,
+		"yumi_joint_7_r" ,
+		"yumi_joint_3_r" ,
+		"yumi_joint_4_r" ,
+		"yumi_joint_5_r" ,
+		"yumi_joint_6_r" ,
+		"yumi_joint_1_l" ,
+		"yumi_joint_2_l" ,
+		"yumi_joint_7_l" ,
+		"yumi_joint_3_l" ,
+		"yumi_joint_4_l" ,
+		"yumi_joint_5_l" ,
+		"yumi_joint_6_l" ,
+		"gripper_r_joint" ,
+		"gripper_r_joint_m" ,
+		"gripper_l_joint" ,
+		"gripper_l_joint_m"
 };
-
-#define TO_PY_PORT 9180
-#define FROM_PY_PORT 9120
-
-unsigned int py_port = TO_PY_PORT;
-char py_addr[20] = "127.0.0.1";
-
-Tree xmate_tree,master_tree;
+Tree xmate_tree,master_tree,slave_l_tree, master_l_tree;
 /* main chain*/
-Chain chain,master_chain, xmate_chain;
+Chain chain,master_chain, xmate_chain, slave_l_chain, master_l_chain;
 /* sub chain*/
 Chain master_subchain, xmate_subchain;
 /* log file stream*/
 ofstream fout;
 
-/* 6x1 end-effector frame and constraint frame vector*/
-std::vector<double> vec_ee(6), vec_constraint(6);
-/* 7*1 quaternion and transformation vector*/
-std::vector<double> qt_vec_ee(7);
-
-
-vector<string> split(const string& str, const string& delim) {
-	vector<string> res;
-	if("" == str) return res;
-	//先将要切割的字符串从string类型转换为char*类型
-	char * strs = new char[str.length() + 1] ; //不要忘了
-	strcpy(strs, str.c_str());
-
-	char * d = new char[delim.length() + 1];
-	strcpy(d, delim.c_str());
-
-	char *p = strtok(strs, d);
-	while(p) {
-		string s = p; //分割得到的字符串转换为string类型
-		res.push_back(s); //存入结果数组
-		p = strtok(NULL, d);
-	}
-
-	return res;
-}
+#define TO_ROBOSUITE_PORT 9170
+unsigned int slave_port = TO_ROBOSUITE_PORT;
+char slave_addr[20] = "127.0.0.1";
 
 void Joint_State_Msg_Initialize(int size, char* joint_name_list[]){
     int i;
@@ -144,8 +113,15 @@ void master_data_receive_Callback(const sensor_msgs::JointStateConstPtr& msg)
 	
 	int i;
 	new_target = true;
-	for(i = 0; i < 7; i++)
+	for(i = 0; i < 7; i++){
 		master_joint_positions(i)=msg->position[i];
+
+		master_l_joint_positions(i)=msg->position[i+7];
+	}
+	master_jaw_state = msg->position[14];
+
+
+
   //printf("I heard: [%f] [%f] [%f] [%f] [%f] [%f] [%f]\r\n",pos[0],pos[1],pos[2],pos[3],pos[4],pos[5],pos[6]);
  // ROS_INFO("I heard: [%f] [%f] [%f] [%f] [%f] [%f] [%f]",pos[0],pos[1],pos[2],pos[3],pos[4],pos[5],pos[6]);
  
@@ -164,21 +140,9 @@ void print_frame(Frame frame_to_print){
 void get_6x1_vector_from_frame(Frame frame, std::vector<double>& vec){
 
 	frame.M.GetRPY(vec[0],vec[1],vec[2]);
-
 	vec[3] = frame.p.data[0];
 	vec[4] = frame.p.data[1];
 	vec[5] = frame.p.data[2];
-
-}
-
-void get_qt_vector_from_frame(Frame frame, std::vector<double>& vec){
-
-
-	frame.M.GetQuaternion(vec[0],vec[1],vec[2],vec[3]);
-
-	vec[4] = frame.p.data[0];
-	vec[5] = frame.p.data[1];
-	vec[6] = frame.p.data[2];
 
 }
 
@@ -341,11 +305,10 @@ int clik_solver(JntArray master_data, Frame cartisian_target, JntArray slave_cur
 
 
 }
-Frame cartisian_target_old;
-int clik_solver_pinv(JntArray master_data, Frame cartisian_target, JntArray slave_current, JntArray& slave_data, JntArray& slave_constraint){
+
+int clik_solver_pinv(JntArray master_data, Frame cartisian_target, JntArray slave_current, JntArray& slave_data){
 
 	slave_data.resize(7);
-
 
 	JntArray zero_position(7);
 	JntArray qold(7),qout(7);
@@ -376,7 +339,8 @@ int clik_solver_pinv(JntArray master_data, Frame cartisian_target, JntArray slav
 	/* slave sub chain fk solver*/
 	ChainFkSolverPos_recursive slave_subchain_fksolver = ChainFkSolverPos_recursive(xmate_subchain);
 
-
+	/* 6x1 end-effector and constraint vector*/
+	std::vector<double> vec_ee(6), vec_constraint(6);
 	int i,step;
 	double norm_rot, norm_vel;
 	/*initialization*/
@@ -394,17 +358,23 @@ int clik_solver_pinv(JntArray master_data, Frame cartisian_target, JntArray slav
 	cartisian_target.M.GetRPY(target_rpy[0],target_rpy[1],target_rpy[2]);
 	printf("target angle: %.2f, %.2f, %.2f\n", target_rpy[0] ,target_rpy[1],target_rpy[2]);
 */
+	cartisian_target.M.DoRotY(M_PI_2);
+	cartisian_target.M.DoRotX(-M_PI_2);
+
+
+
+
 	print_frame(cartisian_target);
-	//get_6x1_vector_from_frame(cartisian_target, vec_ee);
+	get_6x1_vector_from_frame(cartisian_target, vec_ee);
 	/* clear iteration steps*/
 
 	step = 0;
 	norm_rot = 0;
 	norm_vel = 0;
-	/* jacobian must be defined a size before used*/
+	/* jacobian must be difined a size before used*/
 	jcb_ee.resize(7);
 	jcb_constraint.resize(4);
-	/* Calculate the target constraint from master device*/
+	/* caculate the target constraint from master device*/
 	JntArray master_subchain_data;
 
 	master_subchain_data.resize(3);
@@ -419,10 +389,21 @@ int clik_solver_pinv(JntArray master_data, Frame cartisian_target, JntArray slav
 	get_6x1_vector_from_frame(constraint_frame, vec_constraint);
 	//printf("constraint frame\n");
 	//print_frame(constraint_frame);
+	fout 	<< vec_ee[0]<<" "
+			<< vec_ee[1]<<" "
+			<< vec_ee[2]<<" "
+			<< vec_ee[3]<<" "
+			<< vec_ee[4]<<" "
+			<< vec_ee[5]<<", "
+			<< vec_constraint[0]<<" "
+			<< vec_constraint[1]<<" "
+			<< vec_constraint[2]<<" "
+			<< vec_constraint[3]<<" "
+			<< vec_constraint[4]<<" "
+			<< vec_constraint[5]<<", ";
 
-
-	//do{
-		//printf("---------------step%d-----------------\n",step);
+	do{
+		printf("---------------step%d-----------------\n",step);
 		/* slave forward kinematic*/
 		slave_fksolver.JntToCart(qout, slave_ee_temp_pos);
 		/* slave constraint sub chain fk*/
@@ -435,14 +416,12 @@ int clik_solver_pinv(JntArray master_data, Frame cartisian_target, JntArray slav
 		//cout<<"slave link4:"<<endl;
 		//print_frame(slave_constraint_temp_pos);
 		/* calculate differential between target and current slave end-effector*/
-		//ee_twist = diff(slave_ee_temp_pos, cartisian_target) + diff(cartisian_target_old, cartisian_target);
-		ee_twist = diff(slave_ee_temp_pos, cartisian_target) ;
-
+		ee_twist = diff(slave_ee_temp_pos, cartisian_target);
 		/* calculate differential of constraint frames*/
 		constraint_twist = diff(slave_constraint_temp_pos, constraint_frame);
 		/* clear velocity, just use rotation for constraint */
 		SetToZero( constraint_twist.vel);
-		cout<<"constraint_twist:"<<constraint_twist.rot<<endl;
+		//cout<<"constraint_twist:"<<constraint_twist<<endl;
 		/*
 
 		cout<<"qout:\n"
@@ -496,31 +475,23 @@ int clik_solver_pinv(JntArray master_data, Frame cartisian_target, JntArray slav
 			<<null_space_projector<<endl;
 		*/
 		/* q0_inc augment to 7x1*/
-		Eigen::Matrix<double, 7, 1> q0inc_aug, joint_constraint_vec;
+		Eigen::Matrix<double, 7, 1> q0inc_aug;
 		q0inc_aug.setZero();
 		q0inc_aug.head(4) = q0inc;
 		/*
-		cout<<"q0inc_aug: "
-			<<q0inc_aug.transpose()<<endl;
-
-
-		cout<<"qinc: "
-			<<qinc.transpose()<<endl;
-*/
-		joint_constraint_vec = null_space_projector * q0inc_aug;
-		slave_constraint.data = q0inc;
-		//cout << "joint_constraint_vec: "<<joint_constraint_vec.transpose() <<endl;
-		qout.data = qold.data + qinc + joint_constraint_vec;
+		cout<<"q0inc_aug:\n"
+			<<q0inc_aug<<endl;
+		*/
+		/*
+		cout<<"q increasement:\n"
+			<<qinc<<endl;
+		*/
+		qout.data = qold.data + qinc + null_space_projector * q0inc_aug;
 		//qout.data = qold.data + qinc;
-		cout << "	qout: "<<qout.data.transpose() <<endl;
-
-		for(i = 0; i < 7; i++){
-			if(qout(i) > M_PI)
-				qout(i) -= M_PI * 2;
-			if(qout(i) < -M_PI)
-				qout(i) += M_PI * 2;
-		}
-
+		/*
+		cout<<"qout_updated:\n"
+						<<qout.data<<endl;
+		*/
 		qold = qout;
 
 		norm_rot = ee_twist.rot.Norm();
@@ -531,18 +502,29 @@ int clik_solver_pinv(JntArray master_data, Frame cartisian_target, JntArray slav
 			return -1;
 		}
 
-	//}while(norm_rot > 1e-3 || norm_vel > 1e-3);
-	//}while(0);
-	//fout << master_joint_positions.data.transpose() << ", "<<joint_constraint_vec.transpose()<<endl;
+	}while(norm_rot > 1e-3 || norm_vel > 1e-3);
+	for(i = 0; i < 7; i++){
+
+		int scalar = qout(i) / M_PI / 2;
+
+		qout(i) -= (scalar) * M_PI * 2;
+
+		if(qout(i) > M_PI) qout(i) -= M_PI * 2;
+		if(qout(i) < -M_PI) qout(i) += M_PI * 2;
+
+
+	}
+
 	slave_data = qout;
-	//printf( "clik solve succeed! step=%d\n",step);
+	printf( "clik solve succeed! step=%d\n",step);
 	/* if find a solution then return the iteration steps*/
 	return step;
 
+
+
+
 }
-
 int main(int argc,char** argv){
-
 	ros::init(argc, argv, "ik_solver");
 
 	ros::start(); // explicitly needed since our nodehandle is going out of scope.
@@ -556,13 +538,7 @@ int main(int argc,char** argv){
 	/* get systime */
 	time_t now = time(NULL);
 	tm* tm_t = localtime(&now);
-	std::stringstream file_name;
-	file_name <<"/home/robot/xmate_log/xmate_clik_log_"<<tm_t->tm_year + 1900  << tm_t->tm_mon + 1  << tm_t->tm_mday
-		<< tm_t->tm_hour << tm_t->tm_min << tm_t->tm_sec;
-    //std::cout << file_name.str();
 
-	/* create log file*/
-	fout.open(file_name.str());
 
 
 
@@ -573,29 +549,32 @@ int main(int argc,char** argv){
 
 	/* load master and slave urdf model*/
 
-	kdl_parser::treeFromFile("/home/robot/catkin_ws/src/xmate3_description/urdf/xmate3_with_gripper.urdf",xmate_tree);
+	kdl_parser::treeFromFile("/home/robot/catkin_ws/src/yumi_description/urdf/yumi.urdf",xmate_tree);
 	kdl_parser::treeFromFile("/home/robot/catkin_ws/src/srs-77dof/urdf/srs-77dof.urdf",master_tree); 
 	bool exit_value; 
 	/* get kinematic chain of master and slave*/
 
-	xmate_tree.getChain("world","tcp_link",xmate_chain);
-	master_tree.getChain("base_link","right_tcp",master_chain);
+	xmate_tree.getChain("yumi_body","gripper_r_base",xmate_chain);
+	xmate_tree.getChain("yumi_body","gripper_l_base",slave_l_chain);
 
-	/* get sub chain for constraints*/
-	xmate_tree.getChain("world","xmate3_link4",xmate_subchain);
-	master_tree.getChain("base_link","link-r3",master_subchain);
+	master_tree.getChain("base_link","right_tcp",master_chain);
+	master_tree.getChain("base_link","left_tcp",master_l_chain);
+
 
 	/* create forward kinematic solver of master and slave*/
 	ChainFkSolverPos_recursive slave_fksolver = ChainFkSolverPos_recursive(xmate_chain);
 	ChainFkSolverPos_recursive master_fksolver = ChainFkSolverPos_recursive(master_chain);
- 
+
+	ChainFkSolverPos_recursive slave_l_fksolver = ChainFkSolverPos_recursive(slave_l_chain);
+	ChainFkSolverPos_recursive master_l_fksolver = ChainFkSolverPos_recursive(master_l_chain);
+
 	unsigned int xmate_nj = xmate_chain.getNrOfJoints(); 
 	unsigned int xmate_ns = xmate_chain.getNrOfSegments();
 	printf("xmate_nj=%d, ns=%d\n",xmate_nj,xmate_ns);
-	
+
 	JntArray qz(xmate_nj);
 	JntArray q_last(xmate_nj);
-	Frame cartpos,master_tcp_pos;
+	Frame cartpos,master_tcp_pos,master_l_tcp_pos;
 	//used for time statistic
 	int sc_clk_tck = sysconf(_SC_CLK_TCK);
 	struct tms begin_tms,end_tms;
@@ -613,6 +592,8 @@ int main(int argc,char** argv){
 		q_last(i) = 0;
 	}
 
+
+
 	// for ik test only
 	/*
 
@@ -623,85 +604,95 @@ int main(int argc,char** argv){
 return 0;
 
 */
-	stringstream out_test;
+
+	//inverse kinematics
+	//initialize the solver
+	double eps = 1e-5;
+	double eps_joints = 1e-15;
+	int maxiter = 500;
+	ChainIkSolverPos_LMA iksolver(xmate_chain,eps,maxiter,eps_joints);
+	ChainIkSolverPos_LMA left_iksolver(slave_l_chain,eps,maxiter,eps_joints);
 
 	while(ros::ok()){
-		/*
 		if(!new_target){
 			ros::spinOnce();
 			continue;
 		}
-*/
+
 
 		/*  solve master TCP position*/
-
 		master_fksolver.JntToCart(master_joint_positions,master_tcp_pos);
-
-		get_qt_vector_from_frame(master_tcp_pos, qt_vec_ee);
+		master_l_fksolver.JntToCart(master_l_joint_positions,master_l_tcp_pos);
 		/* save master joint position and target position*/
 
 		//fout << sn++ <<", "<< master_joint_positions.data.transpose() << ", " << master_tcp_pos.M <<", "<< master_tcp_pos.p<<", "  ;
 
         //begin = clock();
-
-
 		/* get inverse kinematics of xmate*/
+		master_tcp_pos.M.DoRotY(M_PI_2);
+		master_tcp_pos.M.DoRotX(-M_PI_2);
 
-        ik_status = clik_solver_pinv(master_joint_positions,master_tcp_pos,xmate_joint_positions_clik, xmate_joint_positions_clik, slave_constraint);
-        //clik_solver_ex(master_joint_positions,master_tcp_pos,xmate_joint_positions_clik, xmate_joint_positions_clik, slave_constraint);
+		master_l_tcp_pos.M.DoRotX(-M_PI_2);
+		master_l_tcp_pos.M.DoRotZ(M_PI_2);
 
-        //kinematics_status = iksolver.CartToJnt(qz, master_tcp_pos, xmate_joint_positions);
-        /*record data in log file*/
-        if(new_target){
+		/*rotation about z of world 90deg */
+		Eigen::Isometry3d T1 = Eigen::Isometry3d::Identity();
+		AngleAxisd rotz90(M_PI_2, Vector3d(0, 0, 1));
+		T1.rotate(rotz90.toRotationMatrix());
 
-        	fout << sn++ <<", ";
-        	fout 	<< qt_vec_ee[0]<<" "
-        				<< qt_vec_ee[1]<<" "
-        				<< qt_vec_ee[2]<<" "
-        				<< qt_vec_ee[3]<<" "
-        				<< qt_vec_ee[4]<<" "
-						<< qt_vec_ee[5]<<" "
-        				<< qt_vec_ee[6]<<", ";
-        	fout << master_joint_positions.data.transpose() << ", ";
 
-        	fout << slave_constraint.data.transpose() << ", ";
-        	fout << xmate_joint_positions_clik.data.transpose() << endl;
+		Eigen::Isometry3d tmp_frame;
 
-        	fout.flush();
+		tf::transformKDLToEigen(master_tcp_pos, tmp_frame);
 
-        }
+		tmp_frame = T1 * tmp_frame;
+		tf::transformEigenToKDL( tmp_frame, master_tcp_pos);
+/*left tcp*/
+		tf::transformKDLToEigen(master_l_tcp_pos, tmp_frame);
 
-        /*
-        cout<<"***************record start****************"<<endl;
-		cout<<out_test.str();
-		cout<<"xxxxxxxxxxxxxxxrecord end  xxxxxxxxxxxxxxxx"<<endl;
-		cout.flush();
-		*/
-		//end = clock();
+		tmp_frame = T1 * tmp_frame;
+		tf::transformEigenToKDL( tmp_frame, master_l_tcp_pos);
+
+		printf("right frame:\r\n");
+		print_frame(master_tcp_pos);
+		printf("left frame:\r\n");
+		print_frame(master_l_tcp_pos);
+
+        //ik_status = clik_solver_pinv(master_joint_positions,master_tcp_pos,xmate_joint_positions_clik, xmate_joint_positions_clik);
+		kinematics_status = iksolver.CartToJnt(qz, master_tcp_pos, xmate_joint_positions);
+		kinematics_status = left_iksolver.CartToJnt(qz, master_l_tcp_pos, slave_l_joint_positions);
+		cout<<"ik result:"<<kinematics_status<<endl;
+
 		/* publish ik result*/
-		//if(ik_status >= 0){
+        float joint_data_to_robosuite[7];
+		if(true){
 			for(unsigned int i = 0; i < 7;i++){
 				//std::cout << xmate_joint_positions_clik(i) << std::endl;
 
 				//joint_state.position[i] = xmate_joint_positions(i);
-				joint_state.position[i] = xmate_joint_positions_clik(i);
+				joint_state.position[i] = xmate_joint_positions(i);
+
+
+			}
+			for(unsigned int i = 0; i < 7;i++){
+							//std::cout << xmate_joint_positions_clik(i) << std::endl;
+
+							//joint_state.position[i] = xmate_joint_positions(i);
+							joint_state.position[i+7] = slave_l_joint_positions(i);
+
+
 			}
 			joint_state.header.stamp = ros::Time::now();
 			jointstates_publisher.publish(joint_state);
-			//printf("kdl ik solver succeed!\r\n");
 
 
-		//}
-
-
-		if(new_target){
-			new_target = false;
-			cartisian_target_old = master_tcp_pos;
 		}
 
+		new_target = false;
 		ros::spinOnce();
 	}
 
 
 }
+
 

@@ -57,7 +57,7 @@ JntArray xmate_joint_positions = JntArray(7);
 JntArray xmate_joint_positions_clik = JntArray(7);
 JntArray master_joint_positions = JntArray(7); 
 JntArray slave_constraint =  JntArray(4);
-JntArray slave_constraint_predicted =  JntArray(7);
+JntArray slave_constraint_predicted =  JntArray(4);
 const char* j_name_list[]={
 "xmate_joint_1", 
 "xmate_joint_2", 
@@ -419,8 +419,21 @@ int clik_solver_pinv(JntArray master_data, Frame cartisian_target, JntArray slav
 	get_6x1_vector_from_frame(constraint_frame, vec_constraint);
 	//printf("constraint frame\n");
 	//print_frame(constraint_frame);
-
-
+	/*log (ee_frame) and (constraint_frame)*/
+	/*
+	fout 	<< vec_ee[0]<<" "
+			<< vec_ee[1]<<" "
+			<< vec_ee[2]<<" "
+			<< vec_ee[3]<<" "
+			<< vec_ee[4]<<" "
+			<< vec_ee[5]<<", "
+			<< vec_constraint[0]<<" "
+			<< vec_constraint[1]<<" "
+			<< vec_constraint[2]<<" "
+			<< vec_constraint[3]<<" "
+			<< vec_constraint[4]<<" "
+			<< vec_constraint[5]<<", ";
+*/
 	//do{
 		//printf("---------------step%d-----------------\n",step);
 		/* slave forward kinematic*/
@@ -442,7 +455,221 @@ int clik_solver_pinv(JntArray master_data, Frame cartisian_target, JntArray slav
 		constraint_twist = diff(slave_constraint_temp_pos, constraint_frame);
 		/* clear velocity, just use rotation for constraint */
 		SetToZero( constraint_twist.vel);
-		cout<<"constraint_twist:"<<constraint_twist.rot<<endl;
+		cout<<"constraint_twist:"<<constraint_twist<<endl;
+		/*
+
+		cout<<"qout:\n"
+				<<qout.data<<endl;
+	 			*/
+		/* caculate slave jacobian*/
+
+		ee_jac_solver.JntToJac(qout,jcb_ee);
+		constraint_jac_solver.JntToJac(slave_constraint_joint_data,jcb_constraint);
+		/* caculate pinv of jacobian*/
+		Eigen::MatrixXd jr_ee, jr_constraint;
+		//cout<< "jacobian structure:"<<j_pinv.rows()<<"x"<<j_pinv.cols()<<endl;
+		//cout<< "jacobian structure:"<<jcb.data.rows()<<"x"<<jcb.data.cols()<<endl;
+		pinv(jcb_ee, jr_ee);
+		right_pinv(jcb_constraint, jr_constraint);
+		/*
+		cout<<"jr_constraint:\n"
+								<<jr_constraint<<endl;
+		*/
+
+		/* use Kp = 0.5 as iteration rate*/
+
+		Eigen::Matrix<double, 6, 1> ee_twist_vec, constraint_twist_vec;
+		tf::twistKDLToEigen(ee_twist , ee_twist_vec);
+		tf::twistKDLToEigen(constraint_twist , constraint_twist_vec);
+		/*
+		cout<<"twist_vec:\n"
+						<<ee_twist_vec<<endl;
+		*/
+
+		/* small increasement on q vector*/
+		Eigen::Matrix<double, 7, 1> qinc;
+		qinc = jr_ee * ee_twist_vec ;
+		//qinc.operator *(0.01);
+		qinc*= 0.5;
+		/* small increasement on null space q0*/
+		Eigen::Matrix<double, 4, 1> q0inc;
+		/*          4x6       x      6x1    */
+		q0inc = jr_constraint * constraint_twist_vec ;
+		q0inc*= 1.3;
+		/*
+		cout<<"q0inc:\n"
+			<<q0inc<<endl;
+		*/
+		Eigen::Matrix<double, 7, 7> null_space_projector;
+
+
+		null_space_projector = Eigen::MatrixXd::Identity(7,7) - jr_ee * jcb_ee.data;
+		/*
+		cout<<"null space projector:\n"
+			<<null_space_projector<<endl;
+		*/
+		/* q0_inc augment to 7x1*/
+		Eigen::Matrix<double, 7, 1> q0inc_aug, joint_constraint_vec;
+		q0inc_aug.setZero();
+		q0inc_aug.head(4) = q0inc;
+		/**/
+		cout<<"q0inc_aug:\n"
+			<<q0inc_aug<<endl;
+
+		/*
+		cout<<"q increasement:\n"
+			<<qinc<<endl;
+		*/
+		joint_constraint_vec = null_space_projector * q0inc_aug;
+		slave_constraint.data = q0inc_aug;
+		cout << "joint_constraint_vec: "<<joint_constraint_vec.transpose() <<endl;
+		qout.data = qold.data + qinc + null_space_projector * q0inc_aug;
+		//qout.data = qold.data + qinc;
+		/*
+		cout<<"qout_updated:\n"
+						<<qout.data<<endl;
+		*/
+		for(i = 0; i < 7; i++){
+			if(qout(i) > M_PI)
+				qout(i) -= M_PI * 2;
+			if(qout(i) < -M_PI)
+				qout(i) += M_PI * 2;
+		}
+
+		qold = qout;
+
+		norm_rot = ee_twist.rot.Norm();
+		norm_vel = ee_twist.vel.Norm();
+		/* if convergence cannot be reached within 500 step then return -1*/
+		if(step++ > 500) {
+			printf( "ik solve failed\n");
+			return -1;
+		}
+
+	//}while(norm_rot > 1e-3 || norm_vel > 1e-3);
+	//}while(0);
+	//fout << master_joint_positions.data.transpose() << ", "<<joint_constraint_vec.transpose()<<endl;
+	//slave_data = qout;
+	printf( "clik solve succeed! step=%d\n",step);
+	/* if find a solution then return the iteration steps*/
+	return step;
+
+}
+
+int clik_solver_test(JntArray master_data, Frame cartisian_target, JntArray slave_current, JntArray slave_data, JntArray& slave_constraint){
+
+	slave_data.resize(7);
+
+
+	JntArray zero_position(7);
+	JntArray qold(7),qout(7);
+	/* used to get joint space velocity*/
+	JntArray qdot_out(7);
+	/* save temporary frame of slave end-effector*/
+	Frame slave_ee_temp_pos;
+	/* save constraint frame of master device*/
+	Frame constraint_frame;
+	Frame slave_constraint_temp_pos;
+	/* 6-D differential between target and slave end-effector*/
+	Twist ee_twist;
+	/* 6-D differential between constraint frame of master and slave*/
+	Twist constraint_twist;
+
+	/* slave fk solver*/
+	ChainFkSolverPos_recursive slave_fksolver = ChainFkSolverPos_recursive(xmate_chain);
+	Jacobian jcb_ee, jcb_constraint;
+	/* slave end-effector jacobian solver*/
+	ChainJntToJacSolver ee_jac_solver = ChainJntToJacSolver(xmate_chain);
+	/* slave end-effector jacobian solver*/
+	ChainJntToJacSolver constraint_jac_solver = ChainJntToJacSolver(xmate_subchain);
+
+	/* use kdl velocity solver to get joint space velocity from Twist*/
+	ChainIkSolverVel_pinv vel_solver = ChainIkSolverVel_pinv (xmate_chain);
+	/* master sub chain fk solver*/
+	ChainFkSolverPos_recursive master_subchain_fksolver = ChainFkSolverPos_recursive(master_subchain);
+	/* slave sub chain fk solver*/
+	ChainFkSolverPos_recursive slave_subchain_fksolver = ChainFkSolverPos_recursive(xmate_subchain);
+
+
+	int i,step;
+	double norm_rot, norm_vel;
+	/*initialization*/
+	for(i = 1; i < 7; i++)
+		zero_position(i) = 0;
+
+
+	qout = slave_current;
+	qold = slave_current;
+	/* adjust end-effector of master and slave to the same direction*/
+	//cartisian_target.M.DoRotZ(M_PI_2);
+/*
+	printf("target position: %.2f, %.2f, %.2f\n",cartisian_target.p.data[0],cartisian_target.p.data[1],cartisian_target.p.data[2]);
+	double target_rpy[3];
+	cartisian_target.M.GetRPY(target_rpy[0],target_rpy[1],target_rpy[2]);
+	printf("target angle: %.2f, %.2f, %.2f\n", target_rpy[0] ,target_rpy[1],target_rpy[2]);
+*/
+	//print_frame(cartisian_target);
+	//get_6x1_vector_from_frame(cartisian_target, vec_ee);
+	/* clear iteration steps*/
+
+	step = 0;
+	norm_rot = 0;
+	norm_vel = 0;
+	/* jacobian must be defined a size before used*/
+	jcb_ee.resize(7);
+	jcb_constraint.resize(4);
+	/* Calculate the target constraint from master device*/
+	JntArray master_subchain_data;
+
+	master_subchain_data.resize(3);
+	master_subchain_data.data = master_data.data.head(3);
+	//for(i = 0; i <3; i++)
+	//	master_subchain_data(i) = master_data(i);
+	master_subchain_fksolver.JntToCart(master_subchain_data, constraint_frame);
+	/* transform the target constraint frame into direction consistent with slave link4*/
+	/* rotate pi/2 about Y, then rotate pi about Z*/
+	constraint_frame.M.DoRotY(M_PI_2);
+	constraint_frame.M.DoRotZ(M_PI);
+	get_6x1_vector_from_frame(constraint_frame, vec_constraint);
+	//printf("constraint frame\n");
+	//print_frame(constraint_frame);
+	/*log (ee_frame) and (constraint_frame)*/
+	/*
+	fout 	<< vec_ee[0]<<" "
+			<< vec_ee[1]<<" "
+			<< vec_ee[2]<<" "
+			<< vec_ee[3]<<" "
+			<< vec_ee[4]<<" "
+			<< vec_ee[5]<<", "
+			<< vec_constraint[0]<<" "
+			<< vec_constraint[1]<<" "
+			<< vec_constraint[2]<<" "
+			<< vec_constraint[3]<<" "
+			<< vec_constraint[4]<<" "
+			<< vec_constraint[5]<<", ";
+*/
+	//do{
+		//printf("---------------step%d-----------------\n",step);
+		/* slave forward kinematic*/
+		slave_fksolver.JntToCart(qout, slave_ee_temp_pos);
+		/* slave constraint sub chain fk*/
+		JntArray slave_constraint_joint_data;
+		slave_constraint_joint_data.resize(4);
+		slave_constraint_joint_data.data = qout.data.head(4);
+		slave_subchain_fksolver.JntToCart(slave_constraint_joint_data, slave_constraint_temp_pos);
+		//cout<<"slave ee:"<<endl;
+		//print_frame(slave_ee_temp_pos);
+		//cout<<"slave link4:"<<endl;
+		//print_frame(slave_constraint_temp_pos);
+		/* calculate differential between target and current slave end-effector*/
+		//ee_twist = diff(slave_ee_temp_pos, cartisian_target) + diff(cartisian_target_old, cartisian_target);
+		ee_twist = diff(slave_ee_temp_pos, cartisian_target) ;
+
+		/* calculate differential of constraint frames*/
+		constraint_twist = diff(slave_constraint_temp_pos, constraint_frame);
+		/* clear velocity, just use rotation for constraint */
+		SetToZero( constraint_twist.vel);
+		//cout<<"constraint_twist:"<<constraint_twist<<endl;
 		/*
 
 		cout<<"qout:\n"
@@ -499,20 +726,222 @@ int clik_solver_pinv(JntArray master_data, Frame cartisian_target, JntArray slav
 		Eigen::Matrix<double, 7, 1> q0inc_aug, joint_constraint_vec;
 		q0inc_aug.setZero();
 		q0inc_aug.head(4) = q0inc;
+		/**/
+		cout<<"q0inc:"
+			<<q0inc.transpose()<<endl;
+
 		/*
-		cout<<"q0inc_aug: "
-			<<q0inc_aug.transpose()<<endl;
-
-
-		cout<<"qinc: "
-			<<qinc.transpose()<<endl;
-*/
+		cout<<"q increasement:\n"
+			<<qinc<<endl;
+		*/
 		joint_constraint_vec = null_space_projector * q0inc_aug;
 		slave_constraint.data = q0inc;
 		//cout << "joint_constraint_vec: "<<joint_constraint_vec.transpose() <<endl;
-		qout.data = qold.data + qinc + joint_constraint_vec;
+		qout.data = qold.data + qinc + null_space_projector * q0inc_aug;
 		//qout.data = qold.data + qinc;
-		cout << "	qout: "<<qout.data.transpose() <<endl;
+		/*
+		cout<<"qout_updated:\n"
+						<<qout.data<<endl;
+		*/
+		for(i = 0; i < 7; i++){
+			if(qout(i) > M_PI)
+				qout(i) -= M_PI * 2;
+			if(qout(i) < -M_PI)
+				qout(i) += M_PI * 2;
+		}
+
+		qold = qout;
+
+		norm_rot = ee_twist.rot.Norm();
+		norm_vel = ee_twist.vel.Norm();
+		/* if convergence cannot be reached within 500 step then return -1*/
+		if(step++ > 500) {
+			printf( "ik solve failed\n");
+			return -1;
+		}
+
+	//}while(norm_rot > 1e-3 || norm_vel > 1e-3);
+	//}while(0);
+	//fout << master_joint_positions.data.transpose() << ", "<<joint_constraint_vec.transpose()<<endl;
+	//slave_data = qout;
+	//printf( "clik solve succeed! step=%d\n",step);
+	/* if find a solution then return the iteration steps*/
+	return step;
+
+}
+int clik_solver_ex(JntArray master_data, Frame cartisian_target, JntArray slave_current, JntArray& slave_data, JntArray slave_constraint_from_ae){
+
+	slave_data.resize(7);
+
+	JntArray zero_position(7);
+	JntArray qold(7),qout(7);
+	/* used to get joint space velocity*/
+	JntArray qdot_out(7);
+	/* save temporary frame of slave end-effector*/
+	Frame slave_ee_temp_pos;
+	/* save constraint frame of master device*/
+	Frame constraint_frame;
+	Frame slave_constraint_temp_pos;
+	/* 6-D differential between target and slave end-effector*/
+	Twist ee_twist;
+	/* 6-D differential between constraint frame of master and slave*/
+	Twist constraint_twist;
+
+	/* slave fk solver*/
+	ChainFkSolverPos_recursive slave_fksolver = ChainFkSolverPos_recursive(xmate_chain);
+	Jacobian jcb_ee, jcb_constraint;
+	/* slave end-effector jacobian solver*/
+	ChainJntToJacSolver ee_jac_solver = ChainJntToJacSolver(xmate_chain);
+	/* slave end-effector jacobian solver*/
+	ChainJntToJacSolver constraint_jac_solver = ChainJntToJacSolver(xmate_subchain);
+
+	/* use kdl velocity solver to get joint space velocity from Twist*/
+	ChainIkSolverVel_pinv vel_solver = ChainIkSolverVel_pinv (xmate_chain);
+	/* master sub chain fk solver*/
+	ChainFkSolverPos_recursive master_subchain_fksolver = ChainFkSolverPos_recursive(master_subchain);
+	/* slave sub chain fk solver*/
+	ChainFkSolverPos_recursive slave_subchain_fksolver = ChainFkSolverPos_recursive(xmate_subchain);
+
+
+	int i,step;
+	double norm_rot, norm_vel;
+	/*initialization*/
+	for(i = 1; i < 7; i++)
+		zero_position(i) = 0;
+
+
+	qout = slave_current;
+	qold = slave_current;
+	/* adjust end-effector of master and slave to the same direction*/
+	//cartisian_target.M.DoRotZ(M_PI_2);
+/*
+	printf("target position: %.2f, %.2f, %.2f\n",cartisian_target.p.data[0],cartisian_target.p.data[1],cartisian_target.p.data[2]);
+	double target_rpy[3];
+	cartisian_target.M.GetRPY(target_rpy[0],target_rpy[1],target_rpy[2]);
+	printf("target angle: %.2f, %.2f, %.2f\n", target_rpy[0] ,target_rpy[1],target_rpy[2]);
+*/
+	print_frame(cartisian_target);
+	//get_6x1_vector_from_frame(cartisian_target, vec_ee);
+	/* clear iteration steps*/
+
+	step = 0;
+	norm_rot = 0;
+	norm_vel = 0;
+	/* jacobian must be difined a size before used*/
+	jcb_ee.resize(7);
+	jcb_constraint.resize(4);
+	/* caculate the target constraint from master device*/
+	JntArray master_subchain_data;
+
+	master_subchain_data.resize(3);
+	master_subchain_data.data = master_data.data.head(3);
+	//for(i = 0; i <3; i++)
+	//	master_subchain_data(i) = master_data(i);
+	master_subchain_fksolver.JntToCart(master_subchain_data, constraint_frame);
+	/* transform the target constraint frame into direction consistent with slave link4*/
+	/* rotate pi/2 about Y, then rotate pi about Z*/
+	constraint_frame.M.DoRotY(M_PI_2);
+	constraint_frame.M.DoRotZ(M_PI);
+	get_6x1_vector_from_frame(constraint_frame, vec_constraint);
+	//printf("constraint frame\n");
+	//print_frame(constraint_frame);
+
+
+	//do{
+		//printf("---------------step%d-----------------\n",step);
+		/* slave forward kinematic*/
+		slave_fksolver.JntToCart(qout, slave_ee_temp_pos);
+		/* slave constraint sub chain fk*/
+		JntArray slave_constraint_joint_data;
+		slave_constraint_joint_data.resize(4);
+		slave_constraint_joint_data.data = qout.data.head(4);
+		slave_subchain_fksolver.JntToCart(slave_constraint_joint_data, slave_constraint_temp_pos);
+		//cout<<"slave ee:"<<endl;
+		//print_frame(slave_ee_temp_pos);
+		//cout<<"slave link4:"<<endl;
+		//print_frame(slave_constraint_temp_pos);
+		/* calculate differential between target and current slave end-effector*/
+		ee_twist = diff(slave_ee_temp_pos, cartisian_target);
+		/* calculate differential of constraint frames*/
+		constraint_twist = diff(slave_constraint_temp_pos, constraint_frame);
+		/* clear velocity, just use rotation for constraint */
+		SetToZero( constraint_twist.vel);
+		//cout<<"constraint_twist:"<<constraint_twist<<endl;
+		/*
+
+		cout<<"qout:\n"
+				<<qout.data<<endl;
+	 			*/
+		/* caculate slave jacobian*/
+
+		ee_jac_solver.JntToJac(qout,jcb_ee);
+		constraint_jac_solver.JntToJac(slave_constraint_joint_data,jcb_constraint);
+		/* caculate pinv of jacobian*/
+		Eigen::MatrixXd jr_ee, jr_constraint;
+		//cout<< "jacobian structure:"<<j_pinv.rows()<<"x"<<j_pinv.cols()<<endl;
+		//cout<< "jacobian structure:"<<jcb.data.rows()<<"x"<<jcb.data.cols()<<endl;
+		pinv(jcb_ee, jr_ee);
+		right_pinv(jcb_constraint, jr_constraint);
+		/*
+		cout<<"jr_constraint:\n"
+								<<jr_constraint<<endl;
+		*/
+
+		/* use Kp = 0.5 as iteration rate*/
+
+		Eigen::Matrix<double, 6, 1> ee_twist_vec, constraint_twist_vec;
+		tf::twistKDLToEigen(ee_twist , ee_twist_vec);
+		tf::twistKDLToEigen(constraint_twist , constraint_twist_vec);
+		/*
+		cout<<"twist_vec:\n"
+						<<ee_twist_vec<<endl;
+		*/
+
+		/* small increasement on q vector*/
+		Eigen::Matrix<double, 7, 1> qinc;
+		qinc = jr_ee * ee_twist_vec ;
+		//qinc.operator *(0.01);
+		qinc*= 0.5;
+		/* small increasement on null space q0*/
+		Eigen::Matrix<double, 4, 1> q0inc;
+		/*          4x6       x      6x1    */
+		q0inc = jr_constraint * constraint_twist_vec ;
+		q0inc*= 0.5;
+		/*
+		cout<<"q0inc:\n"
+			<<q0inc<<endl;
+		*/
+		Eigen::Matrix<double, 7, 7> null_space_projector;
+
+
+		null_space_projector = Eigen::MatrixXd::Identity(7,7) - jr_ee * jcb_ee.data;
+		/*
+		cout<<"null space projector:\n"
+			<<null_space_projector<<endl;
+		*/
+		/* q0_inc augment to 7x1*/
+		Eigen::Matrix<double, 7, 1> q0inc_aug, joint_constraint_vec;
+		q0inc_aug.setZero();
+		q0inc_aug.head(4) = slave_constraint_from_ae.data;
+		/*
+		cout<<"q0inc_aug:\n"
+			<<q0inc_aug<<endl;
+		*/
+		/*
+		cout<<"q increasement:\n"
+			<<qinc<<endl;
+		*/
+		joint_constraint_vec = null_space_projector * q0inc_aug;
+		//slave_constraint.data = null_space_projector * q0inc_aug;
+		//cout << "joint_constraint_vec: "<<joint_constraint_vec.transpose() <<endl;
+		qout.data = qold.data + qinc + joint_constraint_vec;
+
+		//qout.data = qold.data + qinc;
+		/*
+		cout<<"qout_updated:\n"
+						<<qout.data<<endl;
+
+		*/
 
 		for(i = 0; i < 7; i++){
 			if(qout(i) > M_PI)
@@ -540,7 +969,6 @@ int clik_solver_pinv(JntArray master_data, Frame cartisian_target, JntArray slav
 	return step;
 
 }
-
 int main(int argc,char** argv){
 
 	ros::init(argc, argv, "ik_solver");
@@ -624,6 +1052,39 @@ return 0;
 
 */
 	stringstream out_test;
+	/*socket for send data to py*/
+	/*TO slave UDP socket init*/
+	int socketudp_topy;
+	struct sockaddr_in addr_topy;
+	//bzero(&addr_toslave, sizeof(addr_toslave));
+	addr_topy.sin_family = AF_INET;
+	//addr_toslave.sin_addr = (in_addr_t)inet_addr(slave_addr);
+	addr_topy.sin_addr.s_addr = (in_addr_t)inet_addr(py_addr);
+	addr_topy.sin_port = htons(TO_PY_PORT);
+
+	socketudp_topy = socket(AF_INET, SOCK_DGRAM, 0);
+	socklen_t addr_udp_len = sizeof(addr_topy);
+
+/* socket for receive data from py*/
+
+
+
+	int socketudp_frompy;
+	struct sockaddr_in addr_frompy;
+	addr_frompy.sin_family = AF_INET;
+	//addr_toslave.sin_addr = (in_addr_t)inet_addr(slave_addr);
+	addr_frompy.sin_addr.s_addr = (in_addr_t)inet_addr(py_addr);
+	addr_frompy.sin_port = htons(FROM_PY_PORT);
+
+	socketudp_frompy = socket(AF_INET, SOCK_DGRAM, 0);
+
+	struct timeval timeout;
+	timeout.tv_sec = 0;//秒
+	timeout.tv_usec = 10000;//微秒
+	if (setsockopt(socketudp_frompy, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) == -1) {
+		printf("setsockopt failed:");
+	}
+	bind(socketudp_frompy,(struct sockaddr*)&addr_frompy,sizeof(addr_frompy));
 
 	while(ros::ok()){
 		/*
@@ -644,11 +1105,43 @@ return 0;
 
         //begin = clock();
 
+		/* send target frame data in quaternion and transistion*/
+		char udp_send_buffer[256] = {0};
+		printf("target and slave sent to encoder:");
+		sprintf(udp_send_buffer,"%f %f %f %f %f %f %f %f %f %f %f %f %f %f",
+				xmate_joint_positions_clik(0),
+				xmate_joint_positions_clik(1),
+				xmate_joint_positions_clik(2),
+				xmate_joint_positions_clik(3),
+				xmate_joint_positions_clik(4),
+				xmate_joint_positions_clik(5),
+				xmate_joint_positions_clik(6),
+				qt_vec_ee[0],
+				qt_vec_ee[1],
+				qt_vec_ee[2],
+				qt_vec_ee[3],
+				qt_vec_ee[4],
+				qt_vec_ee[5],
+				qt_vec_ee[6]
+		);
+		printf("%s\n",udp_send_buffer);
+		sendto(socketudp_topy,(char*)(udp_send_buffer), sizeof(udp_send_buffer),0,(struct sockaddr*)&addr_topy,addr_udp_len);
+		/*receive predicted constraint data from py  */
+		char udp_recv_buf[256] = {0};
+		int nbytes = recvfrom(socketudp_frompy,udp_recv_buf, 256, 0, (struct sockaddr*)&addr_frompy,(socklen_t*)&addr_udp_len);
+		printf("recv constraint:%s\n",udp_recv_buf);
+		string s = udp_recv_buf;//连续多个空格，空格会被过滤掉
 
+		std::vector<string> res = split(s, ",");
+		for (int i = 0; i < res.size(); ++i)
+		{
+			slave_constraint_predicted(i) = stof(res[i]);
+			//cout << slave_constraint_predicted(i) <<","<<endl;
+		}
 		/* get inverse kinematics of xmate*/
 
-        ik_status = clik_solver_pinv(master_joint_positions,master_tcp_pos,xmate_joint_positions_clik, xmate_joint_positions_clik, slave_constraint);
-        //clik_solver_ex(master_joint_positions,master_tcp_pos,xmate_joint_positions_clik, xmate_joint_positions_clik, slave_constraint);
+		clik_solver_test(master_joint_positions,master_tcp_pos,xmate_joint_positions_clik, xmate_joint_positions_clik, slave_constraint);
+        clik_solver_ex(master_joint_positions,master_tcp_pos,xmate_joint_positions_clik, xmate_joint_positions_clik, slave_constraint_predicted);
 
         //kinematics_status = iksolver.CartToJnt(qz, master_tcp_pos, xmate_joint_positions);
         /*record data in log file*/
