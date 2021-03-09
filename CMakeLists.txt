@@ -142,8 +142,12 @@ add_executable(ur_iksolver src/ur_iksolver.cpp)
 add_executable(xmate_iksolver src/xmate_iksolver.cpp)
 add_executable(master_control_xmate src/master_control_xmate.cpp)
 add_executable(master_control_xmate_clik src/master_control_xmate_clik.cpp)
-add_executable(ae_predict_constraint_clik src/ae_predict_constraint_clik.cpp)
+add_executable(ae_clik_use_exo_constraint src/ae_clik_use_exo_constraint.cpp)
+add_executable(ae_clik_use_prediction src/ae_clik_use_prediction.cpp)
 add_executable(ae_online_training src/ae_online_training.cpp)
+add_executable(master_control_xmate_clik_logconstraint src/master_control_xmate_clik_logconstraint.cpp)
+
+
 #add_executable(master_control_lbr_clik src/master_control_lbr_clik.cpp)
 #add_executable(master_control_yumi src/master_control_yumi.cpp)
 #add_executable(testnode src/testnode.cpp)
@@ -172,9 +176,14 @@ target_link_libraries(master_control_xmate_clik kdl_parser)
 target_link_libraries(master_control_xmate_clik eigen_conversions)
 target_link_libraries(master_control_xmate_clik ${catkin_LIBRARIES})
 
-target_link_libraries(ae_predict_constraint_clik orocos-kdl kdl_parser eigen_conversions ${catkin_LIBRARIES})
+target_link_libraries(ae_clik_use_exo_constraint orocos-kdl kdl_parser eigen_conversions ${catkin_LIBRARIES})
+
+target_link_libraries(ae_clik_use_prediction orocos-kdl kdl_parser eigen_conversions ${catkin_LIBRARIES})
 
 target_link_libraries(ae_online_training orocos-kdl kdl_parser eigen_conversions ${catkin_LIBRARIES})
+
+target_link_libraries(master_control_xmate_clik_logconstraint orocos-kdl kdl_parser eigen_conversions ${catkin_LIBRARIES})
+
 
 #target_link_libraries(master_control_lbr_clik orocos-kdl)
 #target_link_libraries(master_control_lbr_clik kdl_parser)
