@@ -58,7 +58,6 @@ JntArray xmate_joint_positions_clik = JntArray(7);
 JntArray master_joint_positions = JntArray(7); 
 JntArray slave_constraint =  JntArray(4);
 JntArray slave_constraint_predicted =  JntArray(4);
-JntArray master_joint_pos_predicted =  JntArray(7);
 const char* j_name_list[]={
 "xmate_joint_1", 
 "xmate_joint_2", 
@@ -87,14 +86,16 @@ Chain chain,master_chain, xmate_chain;
 /* sub chain*/
 Chain master_subchain, xmate_subchain;
 /* log file stream*/
-ofstream fout,mse_rec, constraint_frame_rec;
+ofstream fout,mse_rec,constraint_frame_rec;
 
 /* 6x1 end-effector frame and constraint frame vector*/
-std::vector<double> vec_ee(6), vec_constraint(6), vec_constraint_slave(6) ;
+std::vector<double> vec_ee(6), vec_constraint(6);
 /* 7*1 quaternion and transformation vector*/
 std::vector<double> qt_vec_ee(7);
 
+Frame predicted_constraint_frame;
 
+char rec_constraint_flag = 0;
 vector<string> split(const string& str, const string& delim) {
 	vector<string> res;
 	if("" == str) return res;
@@ -513,17 +514,17 @@ int clik_solver_pinv(JntArray master_data, Frame cartisian_target, JntArray slav
 		Eigen::Matrix<double, 7, 1> q0inc_aug, joint_constraint_vec;
 		q0inc_aug.setZero();
 		q0inc_aug.head(4) = q0inc;
-		/*
+		/**/
 		cout<<"q0inc_aug:\n"
 			<<q0inc_aug<<endl;
-*/
+
 		/*
 		cout<<"q increasement:\n"
 			<<qinc<<endl;
 		*/
 		joint_constraint_vec = null_space_projector * q0inc_aug;
 		slave_constraint.data = q0inc_aug;
-		//cout << "joint_constraint_vec: "<<joint_constraint_vec.transpose() <<endl;
+		cout << "joint_constraint_vec: "<<joint_constraint_vec.transpose() <<endl;
 		qout.data = qold.data + qinc + null_space_projector * q0inc_aug;
 		//qout.data = qold.data + qinc;
 		/*
@@ -610,7 +611,7 @@ int clik_solver_test(JntArray master_data, Frame cartisian_target, JntArray slav
 	printf("target angle: %.2f, %.2f, %.2f\n", target_rpy[0] ,target_rpy[1],target_rpy[2]);
 */
 	//print_frame(cartisian_target);
-	//get_6x1_vector_from_frame(cartisian_target, vec_ee);
+	get_6x1_vector_from_frame(cartisian_target, vec_ee);
 	/* clear iteration steps*/
 
 	step = 0;
@@ -631,25 +632,13 @@ int clik_solver_test(JntArray master_data, Frame cartisian_target, JntArray slav
 	/* rotate pi/2 about Y, then rotate pi about Z*/
 	constraint_frame.M.DoRotY(M_PI_2);
 	constraint_frame.M.DoRotZ(M_PI);
-
 	get_6x1_vector_from_frame(constraint_frame, vec_constraint);
 	//printf("constraint frame\n");
 	//print_frame(constraint_frame);
 	/*log (ee_frame) and (constraint_frame)*/
-	/*
-	fout 	<< vec_ee[0]<<" "
-			<< vec_ee[1]<<" "
-			<< vec_ee[2]<<" "
-			<< vec_ee[3]<<" "
-			<< vec_ee[4]<<" "
-			<< vec_ee[5]<<", "
-			<< vec_constraint[0]<<" "
-			<< vec_constraint[1]<<" "
-			<< vec_constraint[2]<<" "
-			<< vec_constraint[3]<<" "
-			<< vec_constraint[4]<<" "
-			<< vec_constraint[5]<<", ";
-*/
+
+
+
 	//do{
 		//printf("---------------step%d-----------------\n",step);
 		/* slave forward kinematic*/
@@ -659,7 +648,6 @@ int clik_solver_test(JntArray master_data, Frame cartisian_target, JntArray slav
 		slave_constraint_joint_data.resize(4);
 		slave_constraint_joint_data.data = qout.data.head(4);
 		slave_subchain_fksolver.JntToCart(slave_constraint_joint_data, slave_constraint_temp_pos);
-		get_6x1_vector_from_frame(slave_constraint_temp_pos, vec_constraint_slave);
 		//cout<<"slave ee:"<<endl;
 		//print_frame(slave_ee_temp_pos);
 		//cout<<"slave link4:"<<endl;
@@ -669,7 +657,38 @@ int clik_solver_test(JntArray master_data, Frame cartisian_target, JntArray slav
 		ee_twist = diff(slave_ee_temp_pos, cartisian_target) ;
 
 		/* calculate differential of constraint frames*/
-		constraint_twist = diff(slave_constraint_temp_pos, constraint_frame);
+
+		//constraint_twist = diff(slave_constraint_temp_pos, constraint_frame);
+		constraint_twist = diff(slave_constraint_temp_pos, predicted_constraint_frame);
+		std::vector<double> vec_master_constraint(7),vec_slave_constraint(7);
+		get_qt_vector_from_frame(slave_constraint_temp_pos, vec_slave_constraint);
+		get_qt_vector_from_frame(predicted_constraint_frame, vec_master_constraint);
+
+		if(rec_constraint_flag){
+			rec_constraint_flag = 0;
+
+			constraint_frame_rec
+				<< vec_ee[0]<<" "
+				<< vec_ee[1]<<" "
+				<< vec_ee[2]<<" "
+				<< vec_ee[3]<<" "
+				<< vec_ee[4]<<" "
+				<< vec_ee[5]<<", "
+				<< vec_master_constraint[0]<<" "
+				<< vec_master_constraint[1]<<" "
+				<< vec_master_constraint[2]<<" "
+				<< vec_master_constraint[3]<<"，"
+				<< vec_slave_constraint[0]<<" "
+				<< vec_slave_constraint[1]<<" "
+				<< vec_slave_constraint[2]<<" "
+				<< vec_slave_constraint[3]<<endl;
+			constraint_frame_rec.flush();
+		}
+		slave_constraint(0) = vec_slave_constraint[0];
+		slave_constraint(1) = vec_slave_constraint[1];
+		slave_constraint(2) = vec_slave_constraint[2];
+		slave_constraint(3) = vec_slave_constraint[3];
+
 		/* clear velocity, just use rotation for constraint */
 		SetToZero( constraint_twist.vel);
 		//cout<<"constraint_twist:"<<constraint_twist<<endl;
@@ -738,7 +757,7 @@ int clik_solver_test(JntArray master_data, Frame cartisian_target, JntArray slav
 			<<qinc<<endl;
 		*/
 		joint_constraint_vec = null_space_projector * q0inc_aug;
-		slave_constraint.data = q0inc;
+		//slave_constraint.data = q0inc;
 		//cout << "joint_constraint_vec: "<<joint_constraint_vec.transpose() <<endl;
 		qout.data = qold.data + qinc + null_space_projector * q0inc_aug;
 		//qout.data = qold.data + qinc;
@@ -939,7 +958,7 @@ int clik_solver_ex(JntArray master_data, Frame cartisian_target, JntArray slave_
 						<<qout.data<<endl;
 
 		*/
-/**/
+
 		for(i = 0; i < 7; i++){
 			if(qout(i) > M_PI)
 				qout(i) -= M_PI * 2;
@@ -981,19 +1000,19 @@ int main(int argc,char** argv){
 	/* get systime */
 	time_t now = time(NULL);
 	tm* tm_t = localtime(&now);
-	std::stringstream file_name,mse_logfile_name, constraint_logfile_name;
+	std::stringstream file_name,mse_logfile_name,filename3;
 	file_name <<"/home/robot/xmate_log/xmate_clik_log_"<<tm_t->tm_year + 1900  << tm_t->tm_mon + 1  << tm_t->tm_mday
-			<< tm_t->tm_hour << tm_t->tm_min << tm_t->tm_sec;
+		<< tm_t->tm_hour << tm_t->tm_min << tm_t->tm_sec;
 	mse_logfile_name <<"/home/robot/xmate_log/MSE_"<<tm_t->tm_year + 1900  << tm_t->tm_mon + 1  << tm_t->tm_mday
 			<< tm_t->tm_hour << tm_t->tm_min << tm_t->tm_sec;
-	constraint_logfile_name <<"/home/robot/xmate_log/constraint_frame_"<<tm_t->tm_year + 1900  << tm_t->tm_mon + 1  << tm_t->tm_mday
+	filename3 <<"/home/robot/xmate_log/CONSTRAINT_"<<tm_t->tm_year + 1900  << tm_t->tm_mon + 1  << tm_t->tm_mday
 				<< tm_t->tm_hour << tm_t->tm_min << tm_t->tm_sec;
-	//std::cout << file_name.str();
+    //std::cout << file_name.str();
 
 	/* create log file*/
 	fout.open(file_name.str());
 	mse_rec.open(mse_logfile_name.str());
-	constraint_frame_rec.open(constraint_logfile_name.str());
+	constraint_frame_rec.open(filename3.str());
 
 
 	
@@ -1109,8 +1128,8 @@ return 0;
 
 		/* send target frame data in quaternion and transistion*/
 		char udp_send_buffer[256] = {0};
-		//printf("target and slave sent to encoder:");
-		sprintf(udp_send_buffer,"%f %f %f %f %f %f %f",
+		printf("target and slave sent to encoder:");
+		sprintf(udp_send_buffer,"%f %f %f %f %f %f %f ",
 				qt_vec_ee[0],
 				qt_vec_ee[1],
 				qt_vec_ee[2],
@@ -1119,61 +1138,55 @@ return 0;
 				qt_vec_ee[5],
 				qt_vec_ee[6]
 		);
-		//printf("%s\n",udp_send_buffer);
+		printf("%s\n",udp_send_buffer);
 		sendto(socketudp_topy,(char*)(udp_send_buffer), sizeof(udp_send_buffer),0,(struct sockaddr*)&addr_topy,addr_udp_len);
 		/*receive predicted constraint data from py  */
 		char udp_recv_buf[256] = {0};
 		int nbytes = recvfrom(socketudp_frompy,udp_recv_buf, 256, 0, (struct sockaddr*)&addr_frompy,(socklen_t*)&addr_udp_len);
-		//printf("predict:\t%s\n",udp_recv_buf);
-
+		printf("recv constraint:\t%s\n",udp_recv_buf);
 		string s = udp_recv_buf;//连续多个空格，空格会被过滤掉
 
 		std::vector<string> res = split(s, ",");
+
+		JntArray quat(4);
 		for (int i = 0; i < res.size(); ++i)
 		{
-			master_joint_pos_predicted(i) = stof(res[i]);
-			//cout << slave_constraint_predicted(i) <<","<<endl;
+			quat(i) = stof(res[i]);
+			//cout << quat(i) <<","<<endl;
 		}
+		predicted_constraint_frame.M = Rotation::Quaternion(quat(0),quat(1),quat(2),quat(3));
 
 		/* get inverse kinematics of xmate*/
 
+		clik_solver_test(master_joint_positions,master_tcp_pos,xmate_joint_positions_clik, xmate_joint_positions_clik, slave_constraint);
+        //clik_solver_ex(master_joint_positions,master_tcp_pos,xmate_joint_positions_clik, xmate_joint_positions_clik, slave_constraint_predicted);
 
-		clik_solver_test(master_joint_pos_predicted,master_tcp_pos,xmate_joint_positions_clik, xmate_joint_positions_clik, slave_constraint);
-        /*calculate xmate_joint_positions_clik*/
-		//clik_solver_ex(master_joint_positions,master_tcp_pos,xmate_joint_positions_clik, xmate_joint_positions_clik, slave_constraint_predicted);
-
-        Eigen::Matrix<double, 7, 1> master_diff;
-        master_diff = master_joint_positions.data -  master_joint_pos_predicted.data;
-        float master_MSE_error = (pow(master_diff(0,0),2) + pow(master_diff(1,0),2) + pow(master_diff(2,0),2)+ pow(master_diff(3,0),2)+ pow(master_diff(4,0),2)+ pow(master_diff(5,0),2)+ pow(master_diff(6,0),2)) / 7.0;
-        float master_RMSE_error = sqrt(master_MSE_error);
+        Eigen::Matrix<double, 4, 1> q_c_diff;
+        q_c_diff = slave_constraint.data -  quat.data;
+        float constraint_MSE_error = (pow(q_c_diff(0,0),2) + pow(q_c_diff(1,0),2) + pow(q_c_diff(2,0),2)+ pow(q_c_diff(3,0),2)) / 4.0;
+        cout<<"error:"<<q_c_diff.transpose()<<endl;
+        cout<<"MSE:"<<constraint_MSE_error<<endl;
         //kinematics_status = iksolver.CartToJnt(qz, master_tcp_pos, xmate_joint_positions);
         /*record two constraints and mse*/
-		if(new_target){
-			cout<<"MASTER :" << master_joint_positions.data.transpose() << endl;
-			cout<<"PREDICT:" << master_joint_pos_predicted.data.transpose() << endl;
-			cout<<"error:"<<master_diff.transpose()<<endl;
-			cout<<"RMSE:"<<master_RMSE_error<<endl;
-			mse_rec <<  master_RMSE_error << endl;
-			//mse_rec <<  slave_constraint.data.transpose() << ", ";
-			//mse_rec << slave_constraint_predicted.data.transpose() << endl;
-			mse_rec.flush();
+        if(new_target){
+        	mse_rec <<  constraint_MSE_error << ", ";
+        	mse_rec <<  slave_constraint.data.transpose() << ", ";
+        	mse_rec << quat.data.transpose() << endl;
+        	mse_rec.flush();
+        	rec_constraint_flag = 1;
+        }
 
-			constraint_frame_rec << master_joint_positions.data.transpose() << ", ";
-			constraint_frame_rec << master_joint_pos_predicted.data.transpose() << endl;
-
-			constraint_frame_rec.flush();
-		}
-        /*record data in log file*/
-        if(new_target && master_MSE_error > 0.1){
+        /*record data that mse exceed threshthod in log file*/
+        if(new_target && constraint_MSE_error > 0.01){
 
         	fout << sn++ <<", ";
         	fout 	<< qt_vec_ee[0]<<" "
-					<< qt_vec_ee[1]<<" "
-					<< qt_vec_ee[2]<<" "
-					<< qt_vec_ee[3]<<" "
-					<< qt_vec_ee[4]<<" "
-					<< qt_vec_ee[5]<<" "
-					<< qt_vec_ee[6]<<", ";
+        				<< qt_vec_ee[1]<<" "
+        				<< qt_vec_ee[2]<<" "
+        				<< qt_vec_ee[3]<<" "
+        				<< qt_vec_ee[4]<<" "
+						<< qt_vec_ee[5]<<" "
+        				<< qt_vec_ee[6]<<", ";
         	fout << master_joint_positions.data.transpose() << ", ";
 
         	fout << slave_constraint.data.transpose() << ", ";
@@ -1182,6 +1195,8 @@ return 0;
         	fout.flush();
 
         }
+
+
 
         /*
         cout<<"***************record start****************"<<endl;
