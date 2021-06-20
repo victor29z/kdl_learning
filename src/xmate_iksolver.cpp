@@ -80,14 +80,7 @@ int main(int argc,char** argv){
 
 	ros::start(); // explicitly needed since our nodehandle is going out of scope.
 	ros::NodeHandle n;
-	ros::Publisher joint_angle_publisher[6];
-	joint_angle_publisher[0] = n.advertise<std_msgs::Float64>("joint1_position_controller/command", 1000);
-	joint_angle_publisher[1] = n.advertise<std_msgs::Float64>("joint2_position_controller/command", 1000);
-	joint_angle_publisher[2] = n.advertise<std_msgs::Float64>("joint3_position_controller/command", 1000);
-	joint_angle_publisher[3] = n.advertise<std_msgs::Float64>("joint4_position_controller/command", 1000);
-	joint_angle_publisher[4] = n.advertise<std_msgs::Float64>("joint5_position_controller/command", 1000);
-	joint_angle_publisher[5] = n.advertise<std_msgs::Float64>("joint6_position_controller/command", 1000);
-
+	
 	//ros::Publisher jointstates_publisher = n.advertise<sensor_msgs::JointState>("joint_cmd", 1000);
 	ros::Publisher jointstates_publisher = n.advertise<sensor_msgs::JointState>("joint_states", 1000);
    
@@ -96,7 +89,7 @@ int main(int argc,char** argv){
 	Joint_State_Msg_Initialize(NO_OF_JOINTS,(char**)j_name_list);
 
 	Tree my_tree; 
-	kdl_parser::treeFromFile("/home/robot/catkin_ws/src/xmate3_description/urdf/xmate3_with_gripper.urdf",my_tree);
+	kdl_parser::treeFromFile("/home/robot/catkin_ws/src/exoskeleton_package/xmate3_description/urdf/xmate3_with_gripper.urdf",my_tree);
 	bool exit_value; 
 	Chain chain; 
 	exit_value = my_tree.getChain("world","tcp_link",chain);
@@ -226,24 +219,6 @@ int main(int argc,char** argv){
 	}
 
 
-	/*
-	//jacobian
-	Jacobian jcb;
-
-	kinematics_status = jac_solver.JntToJac(jointpositions,jcb,-1);
-	if(kinematics_status>=0){
-		printf("Jacobian Structure: %d x %d \r\n",jcb.columns(),jcb.rows());
-		for(unsigned int i = 0;i < 6; i++){
-			printf("[");
-			for(unsigned int j = 0; j < 6; j++) printf("%f, ", jcb(i,j));
-			printf("]\r\n");
-		}
-		printf("%s \n","Jacobian Success, thanks KDL!");
-	}
-	else{
-		printf("%s \n","Error:could not calculate jacobian : ");
-	}
-	*/
 
 }
 

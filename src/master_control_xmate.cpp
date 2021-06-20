@@ -249,24 +249,5 @@ int main(int argc,char** argv){
 	}
 
 
-	/*
-	//jacobian
-	Jacobian jcb;
-
-	kinematics_status = jac_solver.JntToJac(jointpositions,jcb,-1);
-	if(kinematics_status>=0){
-		printf("Jacobian Structure: %d x %d \r\n",jcb.columns(),jcb.rows());
-		for(unsigned int i = 0;i < 6; i++){
-			printf("[");
-			for(unsigned int j = 0; j < 6; j++) printf("%f, ", jcb(i,j));
-			printf("]\r\n");
-		}
-		printf("%s \n","Jacobian Success, thanks KDL!");
-	}
-	else{
-		printf("%s \n","Error:could not calculate jacobian : ");
-	}
-	*/
-
 }
 

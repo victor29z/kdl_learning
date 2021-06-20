@@ -138,10 +138,14 @@ link_directories(${catkin_LIBRARY_DIRS})
 
 
 add_executable(fkine src/fkine.cpp)
-add_executable(ur_iksolver src/ur_iksolver.cpp)
+
 add_executable(xmate_iksolver src/xmate_iksolver.cpp)
 add_executable(master_control_xmate src/master_control_xmate.cpp)
 add_executable(master_control_xmate_clik src/master_control_xmate_clik.cpp)
+
+add_executable(vive_control_xmate_clik src/vive_control_xmate_clik.cpp)
+add_executable(vive_control_xmate src/vive_control_xmate.cpp)
+
 add_executable(ae_clik_use_exo_constraint src/ae_clik_use_exo_constraint.cpp)
 add_executable(ae_clik_use_prediction src/ae_clik_use_prediction.cpp)
 add_executable(ae_online_training src/ae_online_training.cpp)
@@ -159,9 +163,7 @@ add_executable(master_control_xmate_clik_logconstraint src/master_control_xmate_
 target_link_libraries(fkine orocos-kdl)
 target_link_libraries(fkine kdl_parser)
 
-target_link_libraries(ur_iksolver orocos-kdl)
-target_link_libraries(ur_iksolver kdl_parser)
-target_link_libraries(ur_iksolver ${catkin_LIBRARIES})
+
 
 target_link_libraries(xmate_iksolver orocos-kdl)
 target_link_libraries(xmate_iksolver kdl_parser)
@@ -175,6 +177,10 @@ target_link_libraries(master_control_xmate_clik orocos-kdl)
 target_link_libraries(master_control_xmate_clik kdl_parser)
 target_link_libraries(master_control_xmate_clik eigen_conversions)
 target_link_libraries(master_control_xmate_clik ${catkin_LIBRARIES})
+
+target_link_libraries(vive_control_xmate_clik orocos-kdl kdl_parser eigen_conversions ${catkin_LIBRARIES})
+target_link_libraries(vive_control_xmate orocos-kdl kdl_parser eigen_conversions ${catkin_LIBRARIES})
+
 
 target_link_libraries(ae_clik_use_exo_constraint orocos-kdl kdl_parser eigen_conversions ${catkin_LIBRARIES})
 
